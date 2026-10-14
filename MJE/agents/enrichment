@@ -1,0 +1,142 @@
+import httpx
+from utility.constants import AGENT_TYPE
+from utility.audit import record_case_as_wq, wq_audit
+from agent.agents_exception import EnrichmentError
+from agent.agent import AgentInterface
+from utility.logger import logger
+from utility.config import settings
+from database.services.work_queue_service import WorkQueueService
+from database.transaction_manager import TransactionManager
+from database.database_manager import SessionFactory
+from database.db_models.work_queue import WorkQueue
+
+
+class EnrichmentAgent(AgentInterface):
+    """
+    Agent responsible for validating work queue items by invoking
+    the Business Rule Engine API and recording results in the audit logs.
+    """
+
+    def __init__(self, case_id, trigger_type: str, wq_id: int = None):
+        """
+        Initialize EnrichmentAgent with identifiers and services.
+
+        Args:
+            case_id (str): Unique identifier for the case being processed.
+            trigger_type (str): Type of event that triggered this agent.
+            wq_id (int, optional): Work queue ID associated with this case.
+        """
+        super().__init__(case_id, trigger_type)
+        self.wq_id = wq_id
+        self.work_queue_service = WorkQueueService(TransactionManager(SessionFactory))
+
+    @record_case_as_wq(AGENT_TYPE.ENRICHMENT_AGENT.value)
+    async def auditable_process(self, arguments):
+        """
+        Executes the main auditable process for Enrichment.
+        
+        This method orchestrates:
+        1. Fetching the work queue record.
+        2. Building the API request payload.
+        3. Calling the Enrichment API endpoint.
+        4. Handling and returning the response.
+
+        Args:
+            arguments (dict): Additional arguments for processing (if any).
+        
+        Returns:
+            dict: Process result including enrichment status and response.
+        """
+        wq = await self._get_work_queue()
+        payload = await self._payload_creation(wq)
+        response = await self._call_enrichment_api(payload)
+        return await self._handle_response(response)
+
+
+    @wq_audit("_get_work_queue", AGENT_TYPE.ENRICHMENT_AGENT.value)
+    async def _get_work_queue(self):
+        """
+        Fetch the work queue details for the given work queue ID.
+
+        Returns:
+            object: Work queue record fetched from the database.
+
+        Raises:
+            EnrichmentError: If the work queue record is not found.
+        """
+        wq = self.work_queue_service.get_work_queue(self.wq_id)
+        if not wq:
+            raise EnrichmentError(f"Work queue {self.wq_id} not found")
+        return wq
+    
+    
+    @wq_audit("_payload_creation", AGENT_TYPE.ENRICHMENT_AGENT.value)
+    async def _payload_creation(self, wq: WorkQueue) -> dict:
+        """
+        Create the JSON payload for the Business Rule Engine API request.
+
+        Args:
+            wq (WorkQueue): Work queue object containing necessary details.
+        Returns:
+            dict: JSON payload for the API request.
+        """
+        payload = {
+            "wqId": self.wq_id,
+            "emailId": getattr(wq, "email_id", None),
+            "regionCode": getattr(wq, "region_id", None),
+            "caseId": self.case_id,
+        }
+        logger.info(f"Prepared payload for Enrichment API: {payload}")
+        return payload
+    
+
+    @wq_audit("_call_enrichment_api", AGENT_TYPE.ENRICHMENT_AGENT.value)
+    async def _call_enrichment_api(self, payload):
+        """
+        Send an asynchronous POST request to the Business Rule Engine.
+
+        Args:
+            payload (dict): JSON payload for the API request.
+
+        Returns:
+            httpx.Response: Response object from the API.
+        """
+        endpoint = settings.business_rules_endpoint
+        logger.info(f"Calling {endpoint} with payload: {payload}")
+
+        async with httpx.AsyncClient(timeout=settings.business_rules_endpoint_timeout) as client:
+            resp = await client.post(endpoint, json=payload)
+        
+        logger.info(
+            f"Response received from Business Rule Engine for wq {self.wq_id}: {resp.status_code}"
+        )
+        return resp
+    
+
+    @wq_audit("_handle_response", AGENT_TYPE.ENRICHMENT_AGENT.value)
+    async def _handle_response(self, resp):
+        """
+        Interpret and handle the response from the Business Rule Engine.
+
+        Args:
+            resp (httpx.Response): Response object received from the API.
+
+        Returns:
+            dict: Result containing success status and response details.
+
+        Raises:
+            EnrichmentError: If enrichment fails or response is invalid.
+        """
+        resp_json = resp.json()
+
+        if resp.status_code == 200 and resp_json.get("status") == "Success":
+            logger.info(f"Enrichment success for wq {self.wq_id}")
+            return {"status": "success", "response": resp_json}
+
+        elif resp.status_code == 200 and resp_json.get("status") == "Failure":
+            raise EnrichmentError(
+                f"Enrichment failed for wq {self.wq_id}: {resp_json.get('message')}"
+            )
+
+        else:
+            raise EnrichmentError(f"Enrichment failed for wq {self.wq_id}")
