@@ -1,0 +1,52 @@
+You will be given two inputs: (1) $FILE_INFO, and (2) a list of fields to extract with aliases.
+
+Inputs:
+
+$FILE_TYPE:
+$FILE_DATA
+
+FIELDS_TO_EXTRACT (canonical name + aliases):
+$FIELDS_JSON
+
+Task:
+1) Extract the requested fields wherever they appear (email or Excel). Use aliases as hints for synonyms.
+2) Return a clean, valid JSON object structured as:
+ {
+    "journal_entries":"[
+        {
+            "extracted_from": "sheet_1_name",
+            "field_name_1": "field_name_1 value",
+            "field_name_2": "field_name_2 value",
+            .
+            .
+            .
+            "field_name_51": "field_name_51 value"
+        },
+        {
+            "extracted_from": "sheet_2_name",
+            "field_name_1": "field_name_1 value",
+            "field_name_2": "field_name_2 value",
+            .
+            .
+            .
+            "field_name_51": "field_name_51 value"
+        },
+        .
+        .
+        .
+        {
+            "extracted_from": "last_sheet_name",
+            "field_name_1": "field_name_1 value",
+            "field_name_2": "field_name_2 value",
+            .
+            .
+            .
+            "field_name_51": "field_name_51 value"
+        } 
+    ]"
+}
+3) "currency_key" field captures the currency of "document_amount" field.
+4) DO NOT ADD signs like "+" or "-" when extracting "document_amount".
+5) Each field must contain a single value. If multiple values exist, create separate entries for each.
+6) DO NOT add any commentary outside the JSON.
+7) DO NOT include extracted fields that are null in output JSON
