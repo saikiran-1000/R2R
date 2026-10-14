@@ -1,0 +1,66 @@
+from sqlalchemy import Column, Integer, String, Float, DateTime, func
+from database.database_manager import Base,db_schema
+from database.db_models.output_model import OutputModel
+
+
+class ProcessOutputModel(Base):
+    __tablename__ = 'r2r_process_output_model'
+    __table_args__ = {"schema": db_schema}
+
+    id = Column(Integer, primary_key=True, nullable=False)
+    wq_id = Column(Integer, nullable=True)
+    case_id = Column(Integer, nullable=True)
+    account = Column(String(255), nullable=True)
+    cost_center = Column(String(255), nullable=True)
+    company_code = Column(String(255), nullable=True)
+    customer_group = Column(String(255), nullable=True)
+    amount = Column(Float, nullable=True)
+    document_date = Column(String(255), nullable=True)
+    posting_date = Column(String(255), nullable=True)
+    document_type = Column(String(255), nullable=True)
+    invoice_reference = Column(String(255), nullable=True)
+    intent = Column(String(255), nullable=True)
+    line_item_text = Column(String(255), nullable=True)
+    header_text = Column(String(255), nullable=True)
+    specific_text = Column(String(255), nullable=True)
+    currency = Column(String(255), nullable=True)
+    partner = Column(String(255), nullable=True)
+    tax_code = Column(String(255), nullable=True)
+    line_type = Column(String(255), nullable=True)
+    specific_code = Column(String(255), nullable=True)
+    order_code = Column(String(255), nullable=True)
+    posting_key = Column(String(255), nullable=True)
+    profit_center = Column(String(255), nullable=True)
+    record_number = Column(String(255), nullable=True)
+    wbs = Column(String(255), nullable=True)
+    sb_line = Column(String(255), nullable=True)
+    specific_term = Column(String(255), nullable=True)
+    place_holder = Column(String(255), nullable=True)
+    is_active = Column(String(255), nullable=True)
+    ctg = Column(String(255), nullable=True)
+    transaction_type = Column(String(255), nullable=True)
+    plant = Column(String(255), nullable=True)
+    value_date = Column(String(255), nullable=True)
+    business_place = Column(String(255), nullable=True)
+    reference_key_1 = Column(String(255), nullable=True)
+    reference_key_2 = Column(String(255), nullable=True)
+    partner_pc = Column(String(255), nullable=True)
+    base_unit = Column(String(255), nullable=True)
+    quantity = Column(String(255), nullable=True)
+    exchange_rate = Column(String(255), nullable=True)
+    created_on = Column(DateTime, nullable=True, server_default=func.now())
+    created_by = Column(String(255), nullable=True)
+    version = Column(Integer, nullable=True)
+    
+    @classmethod
+    def create(cls, data:OutputModel)->object:
+        processing_output = cls()
+        # safer: iterate actual columns via SQLAlchemy Table/Column objects
+        for col in data.__table__.columns:
+            name = col.name
+            if name == "id":
+                continue  # skip primary key
+            if hasattr(processing_output, name):
+                setattr(processing_output, name, getattr(data, name))
+        return  processing_output     
+        
