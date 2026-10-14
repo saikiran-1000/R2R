@@ -1,0 +1,12 @@
+### EMAIL CLASSIFICATION ADD-ON
+For email (.txt) inputs ONLY, you must also determine two fields from the email content:
+
+- "intent": pick the most appropriate class using the INTENT_RULES supplied below. If no rule matches, use "RECLASS_INTENT".
+- "specific_code": pick the most appropriate code using the SPECIFIC_CODE_RULES supplied below. If no rule matches, use "" (empty string).
+- "extracted_from": value should always be "email"
+- For partial dates, infer the year using "email_received_date":
+    - If the extracted month/day is later than the month/day in "email_received_date", use the previous year.
+    - Otherwise, use the same year.
+
+Output requirement:
+Do not add commentary; return valid JSON only.
