@@ -1,0 +1,76 @@
+from typing import Any
+from pathlib import Path
+from utility.logger import logger
+
+class BaseAgent:
+    """
+    Common base class for all agent classes (e.g., ExtractionAgent, ValidationAgent, etc.)
+    Contains reusable utility methods for logging, value checks, and safe attribute access.
+    """
+
+    # -----------------------------
+    # Generic Utility Methods
+    # -----------------------------
+    @staticmethod
+    def _is_blank(value: Any) -> bool:
+        """
+        Returns True if the given value is None or an empty string.
+        """
+        return value is None or (isinstance(value, str) and value.strip() == "")
+
+    @staticmethod
+    def _safe_getattr(obj: Any, attr: str, default: Any = None) -> Any:
+        """
+        Safely retrieves an attribute from an object.
+        Returns a default value if the attribute does not exist or obj is None.
+        """
+        try:
+            return getattr(obj, attr, default)
+        except Exception:
+            return default
+
+    # -----------------------------
+    # Logging Utilities
+    # -----------------------------
+    def _log_debug(self, message: str) -> None:
+        """Logs detailed debug-level messages for development or troubleshooting."""
+        logger.debug(f"[{self.__class__.__name__}] {message}")
+
+    def _log_info(self, message: str) -> None:
+        """Logs informational messages about process flow."""
+        logger.info(f"[{self.__class__.__name__}] {message}")
+
+    def _log_warning(self, message: str) -> None:
+        """Logs warning-level messages for non-critical issues that need attention."""
+        logger.warning(f"[{self.__class__.__name__}] {message}")
+
+    def _log_error(self, message: str, exc: Exception | None = None) -> None:
+        """Logs error-level messages with exception context."""
+        if exc:
+            logger.error(f"[{self.__class__.__name__}] {message} | Exception: {exc}")
+        else:
+            logger.error(f"[{self.__class__.__name__}] {message}")
+            
+
+    # -----------------------------
+    # File Utilities
+    # -----------------------------
+    @staticmethod
+    def _read_file_bytes(file_path: str | Path) -> bytes:
+        """
+        Reads raw bytes from a file (binary-safe).
+        Useful for reading Excel, PDF, image, or other attachment types.
+        """
+        try:
+            with open(file_path, "rb") as f:
+                return f.read()
+        except Exception as e:
+            raise IOError(f"Failed to read file: {file_path}. Error: {e}")
+            
+    @staticmethod
+    def _is_excel_ext(ext: str | None) -> bool:
+        """Checks if the provided extension is a supported Excel file type."""
+        if not ext:
+            return False
+        ext = ext.strip().lower()
+        return ext in {".xlsx", ".xls", ".xlsm", ".xlsb", ".xltx", ".xlt", ".xlam"}
