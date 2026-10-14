@@ -1,0 +1,21 @@
+from database.repositories.work_queue_audit_repository import WorkQueueAuditRepository
+from database.db_models.work_queue_audit import WorkQueueAudit
+from database.database_manager import SessionFactory
+
+class WorkQueueAuditService:
+    def __init__(self):
+        self.session = SessionFactory()
+        self.repo = WorkQueueAuditRepository(self.session)
+
+    def create_work_queue_audit(self, **kwargs):
+        work_queue_audit = WorkQueueAudit(**kwargs)
+        self.repo.save(work_queue_audit)
+        self.session.commit()
+        return work_queue_audit
+
+    def get_work_queue_audit(self, id):
+        return self.repo.find_by_id(id)
+
+    def delete_work_queue_audit(self, id):
+        self.repo.delete(id)
+        self.session.commit()
