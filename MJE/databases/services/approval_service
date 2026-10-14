@@ -1,0 +1,131 @@
+from __future__ import annotations
+from typing import List
+
+from database.db_models.journal_entries import JournalEntry, JEStatusEnum
+from database.db_models.requests import ApprovalRequest
+from database.repositories.journal_entries_repository import JournalEntriesRepository
+from database.repositories.approval_rules_repository import ApprovalRulesRepository
+from database.repositories.approval_request_repository import ApprovalRequestRepository
+from database.repositories.work_queue_repository import WorkQueueRepository
+from database.repositories.processingoutputmodel_repository import ProcessingOutputModelRepository
+from database.transaction_manager import TransactionManager
+from dto.agent_parameters import ApproverAgentParameter
+from utility.logger import logger
+
+
+class ApprovalWorkflowService:
+    """
+     In a single transaction:
+      1) Derive fields from work_queue_id
+      2) Insert JE with DRAFT status
+      3) Compute max rule level for (je_type_id, region_id, amount, company_code)
+      4) Insert approval_requests for levels [1-max_level]
+      5) Update JE to PENDING and bump version
+    """
+
+    def __init__(self, tm: TransactionManager):
+        self.tm = tm
+
+    def approval_request_workflow(self, p: ApproverAgentParameter) -> dict:
+        with self.tm as uow:
+            wq_repo: WorkQueueRepository = uow.work_queue_repository
+            pom_repo: ProcessingOutputModelRepository = uow.processingoutputmodel_repository
+            je_repo: JournalEntriesRepository = uow.journal_entries_repository
+            rule_repo: ApprovalRulesRepository = uow.approval_rules_repository
+            req_repo: ApprovalRequestRepository = uow.approval_request_repository
+
+            # 1) Get work queue
+            work_queue = wq_repo.find_by_id(p.wq_id)
+            if not work_queue:
+                raise ValueError(f"WorkQueue with id {p.wq_id} not found")
+
+            # 2) Get distinct case_ids for wq_id
+            case_ids = [case_id[0] for case_id in pom_repo.find_distinct_case_ids_by_wq_id(p.wq_id)]
+            if not case_ids:
+                raise ValueError(f"No case_ids found for wq_id {p.wq_id}")
+
+            created_jes = []
+
+            for case_id in case_ids:
+
+                # 3) Check if journal entry already exists for this case_id and wq_id in approval_entries table
+                existing_je = je_repo.find_by_wq_id_and_case_id(p.wq_id, case_id)
+                if existing_je:
+                    logger.info(f"Journal entry already exists for wq_id {p.wq_id} and case_id {case_id}. Skipping.")
+                    raise ValueError(f"Journal entry already exists for wq_id {p.wq_id} and case_id {case_id}.")
+                    continue
+
+                # 4) Find max version for this case_id and wq_id
+                max_version = pom_repo.find_max_version_by_wq_id_and_case_id(p.wq_id, case_id)
+                if not max_version:
+                    logger.warning(f"No versions found for wq_id {p.wq_id} and case_id {case_id}. Skipping.")
+                    continue
+
+                # 5) sum all amounts for grouped posting key
+                groups = pom_repo.find_grouped_by_posting_key_max_version(p.wq_id, case_id, max_version)
+                if not groups:
+                    logger.warning(f"No data found for wq_id {p.wq_id}, case_id {case_id}, version {max_version}. Skipping.")
+                    continue
+
+                total_amount = groups[0].total_amount
+                company_code = pom_repo.find_company_code_by_wq_id_and_case_id(p.wq_id, case_id)
+                je_type_id = groups[0].posting_key if groups else 1
+
+                # 6) Create one journal entry for this case_id
+                je = JournalEntry(
+                    work_queue_id=p.wq_id,
+                    case_id=case_id,
+                    region_id=work_queue.region_id,
+                    je_type_id=je_type_id,
+                    amount=total_amount,
+                    status="DRAFT",
+                    created_by=p.created_by,
+                    company_code=company_code,
+                )
+                je_repo.save(je)
+                uow.session.flush()
+
+                # 7) Compute all approval levels required for this je
+                max_level = rule_repo.all_levels(
+                    je_type_id=je.je_type_id,
+                    region_id=work_queue.region_id,
+                    amount=total_amount,
+                    company_code=company_code,
+                )
+
+                if max_level and max_level > 0:
+                    rules = rule_repo.find_rules_upto_level(
+                        je_type_id=je.je_type_id,
+                        region_id=work_queue.region_id,
+                        company_code=company_code,
+                        max_level=max_level,
+                    )
+                    min_level = min(r.level for r in rules) if rules else None
+                    reqs = [
+                        ApprovalRequest(
+                            je_id=je.id,
+                            level=r.level,
+                            appr_designation_id=r.appr_designation_id,
+                            status="PENDING",
+                            active=(r.level == min_level),
+                            created_by=p.created_by,
+                        )
+                        for r in rules
+                    ]
+                    if reqs:
+                        req_repo.bulk_insert(reqs)
+                        uow.session.flush()
+
+                    # Update JE to PENDING
+                    je_repo.update_status_version(je.id, "PENDING")
+
+                created_jes.append({
+                    "je_id": je.id,
+                    "case_id": case_id,
+                    "amount": total_amount,
+                })
+
+            if not created_jes:
+                raise ValueError(f"No journal entries created for wq_id {p.wq_id}. Check if rules exist or data is valid.")
+
+            return {"created_jes": created_jes}
