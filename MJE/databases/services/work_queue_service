@@ -1,0 +1,36 @@
+# from MJE_Agentic_Solution.database import transaction_manager
+from database.transaction_manager import TransactionManager
+from database.repositories.work_queue_repository import WorkQueueRepository
+from database.db_models.work_queue import WorkQueue
+from database.database_manager import SessionFactory
+from database.db_models.email import EmailMaster
+
+class WorkQueueService:
+    def __init__(self, transaction_manager:TransactionManager):
+        self.transaction_manager = transaction_manager                
+        # self.repo = WorkQueueRepository(self.transaction_manager)
+        
+
+    def save_work_queue(self,work_queue: WorkQueue):
+        #ork_queue = WorkQueue(**kwargs)
+        with self.transaction_manager as tm:
+            tm.work_queue_repository.save(work_queue)
+        return work_queue 
+
+    def get_work_queue(self, wq_id):
+         with self.transaction_manager as tm:
+        # return self.repo.find_by_id(wq_id) 
+            return self.transaction_manager.work_queue_repository.find_by_id(wq_id)
+
+    def delete_work_queue(self, wq_id):
+        with self.transaction_manager as tm:
+            tm.work_queue_repository.delete(wq_id)
+
+    def get_latest_work_queue_by_case_id(self, case_id: str) -> WorkQueue:
+        with self.transaction_manager as tm:
+            return tm.session.query(WorkQueue).join(
+                EmailMaster, WorkQueue.email_id == EmailMaster.id
+            ).filter(EmailMaster.trace_id == case_id).order_by(
+                WorkQueue.created_date.desc()).first()
+
+                                                                       
