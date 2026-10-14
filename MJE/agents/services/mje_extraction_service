@@ -1,0 +1,215 @@
+import json
+import time
+from string import Template
+from typing import Dict, Any, Union, Tuple
+
+from utility.config import settings
+from utility.json_utils import (
+    best_effort_json_parse,
+    json_default,
+)
+from agent.readers.fields_loader import FieldsLoader
+from agent.readers.intent_loader import IntentRulesLoader
+from agent.readers.specific_code_loader import SpecificCodeRulesLoader
+from agent.readers.eml_reader import TextReader
+from utility.logger import logger
+from prompts.prompt_factory import PromptFactory
+from agent.llm.llm_factory import LLMFactory
+
+
+class MJEExtractionService:
+    """
+    Service for extracting structured data from email and/or Excel inputs using an LLM.
+    Processes the input, builds prompts, invokes the LLM, and returns the extracted JSON.
+    """
+
+    def __init__(self):
+        self.llm = LLMFactory.get_llm(settings.llm_provider)
+        self.text_reader = TextReader()
+
+    def run(
+        self, input_data: Union[Dict[str, Any], str], file_type: str, email_subject: str, email_received_date:str
+    ) -> Dict[str, Any]:
+        """
+        Processes the input data and file type, builds prompts, and invokes the LLM to extract fields.
+
+        Args:
+            input_data: dict for Excel files (already JSON-like by sheet), str for Text/Email.
+            file_type: File extension or type, e.g., 'xlsx', 'xls', 'xlsm', 'txt', 'text', 'eml', or with a leading dot.
+            email_subject: Subject of the email, used if input_data is a string.
+
+        Returns:
+            Dict[str, Any]: A dictionary with extracted fields and trace information.
+        """
+        t0 = time.time()
+        logger.info("run:start")
+
+        system_prompt, user_template_text, fields_list = self._load_prompts_and_fields()
+        file_info_desc, data_placeholder = self._resolve_prompt_metadata(file_type)
+        data_payload = self._prepare_data_payload(input_data, email_subject, email_received_date)
+
+        if file_type.strip().lower() in (".txt", ".text", "txt", "text"):
+            user_template_text = self._augment_email_prompt(user_template_text)
+
+        template_args = {
+            # FILE_TYPE is set to the *placeholder* (e.g., EMAIL_TEXT/EXCEL_JSON)
+            "FILE_TYPE": data_placeholder or "",
+            "FILE_INFO": file_info_desc or "",
+            "FIELDS_JSON": json.dumps(fields_list, ensure_ascii=False, indent=2),
+            "FILE_DATA": data_payload,  # the actual content string/json
+        }
+        logger.info(
+            f"User Prompt Template for file type {file_type}: {user_template_text}"
+        )
+        user_prompt = Template(user_template_text).safe_substitute(**template_args)
+        logger.info(f"User Prompt for file type {file_type}: {user_prompt}")
+        raw = self._invoke_llm(system_prompt, user_prompt)
+        logger.info(f"LLM Raw Output:\n{raw}")
+        parsed = best_effort_json_parse(raw)
+
+        # Convert posting_date / document_date
+        # parsed = normalize_dates_recursive(parsed)
+        # final_output = json.dumps(parsed, ensure_ascii=False, indent=2)
+
+        elapsed = round(time.time() - t0, 3)
+        logger.info(
+            "run:ok", extra={"elapsed_s": elapsed, "fields_count": len(fields_list)}
+        )
+
+        return {
+            "extracted": parsed,
+            "trace": {
+                "fields_requested_count": len(fields_list),
+                "elapsed_seconds": elapsed,
+            },
+        }
+
+    # ************************************************************
+    # -------------------- Helper Methods ------------------------
+    # ************************************************************
+    def _load_prompts_and_fields(self) -> Tuple[str, str, list]:
+        """Load system/user prompts and fields list from files.
+        Returns:
+            Tuple[str, str, List[Dict[str, str]]]: system_prompt, user_template_text, fields_list
+        """
+        logger.debug("_load_prompts_and_fields")
+        system_prompt = self.text_reader.read(settings.system_prompt_path)
+        user_template_text = self.text_reader.read(settings.user_prompt_path)
+        fields_list = FieldsLoader(settings.fields_csv_path).load()
+        logger.debug(
+            "_load_prompts_and_fields:ok",
+            extra={
+                "system_len": len(system_prompt or ""),
+                "user_len": len(user_template_text or ""),
+                "fields_count": len(fields_list or []),
+            },
+        )
+        return system_prompt, user_template_text, fields_list
+
+    def _resolve_prompt_metadata(self, file_type: str) -> Tuple[str, str]:
+        """Get file info description and data placeholder based on file type.
+        Args:
+            file_type (str): File extension or type, e.g., 'xlsx', 'xls', 'xlsm', 'txt', 'text', 'eml', or with a leading dot.
+        Returns:
+            Tuple[str, str]: file_info_desc and data_placeholder
+        """
+        logger.debug("_resolve_prompt_metadata", extra={"file_type": file_type})
+        file_info_desc = PromptFactory.get_file_info_desc(file_type) or ""
+        data_placeholder = PromptFactory.get_data_placeholder(file_type) or ""
+        logger.debug(
+            "_resolve_prompt_metadata:ok",
+            extra={
+                "file_info_desc_len": len(file_info_desc),
+                "data_placeholder": data_placeholder,
+            },
+        )
+        return file_info_desc, data_placeholder
+
+    def _prepare_data_payload(
+        self, input_data: Union[Dict[str, Any], str], email_subject: str, email_received_date:str
+    ) -> str:
+        """Prepare the data payload string for the prompt based on input data type.
+         Args:
+            input_data (Union[Dict[str, Any], str]): dict for Excel files, str for Text/Email.
+            email_subject (str): Subject of the email, used if input_data is a string.
+        Returns:
+            str: The prepared data payload string.
+        """
+        if isinstance(input_data, dict):
+            payload = json.dumps(
+                input_data,
+                ensure_ascii=False,
+                indent=2,
+                default=json_default,
+            )
+            logger.debug(
+                "_prepare_data_payload:json", extra={"payload_len": len(payload)}
+            )
+            return payload
+        if isinstance(input_data, str):
+            logger.debug(
+                "_prepare_data_payload:text", extra={"payload_len": len(input_data)}
+            )
+            payload = f""""email_received_date": {email_received_date},
+            "subject": {email_subject},
+                "body": {input_data}"""
+            return payload
+        raise TypeError(f"input_data must be dict or str; got {type(input_data)}")
+
+    def _invoke_llm(self, system_prompt: str, user_prompt: str) -> str:
+        """Invoke the LLM with system and user prompts.
+        Args:
+            system_prompt (str): System prompt.
+            user_prompt (str): User prompt.
+        Returns:
+            str: The raw LLM output string.
+        """
+        logger.debug(
+            "_invoke_llm",
+            extra={"system_len": len(system_prompt), "user_len": len(user_prompt)},
+        )
+        return self.llm.invoke(system=system_prompt, user_text=user_prompt)
+
+    def _augment_email_prompt(self, user_template_text: str) -> str:
+        """
+        Extend the user prompt with:
+        - maintainable extra instructions from a .txt file
+        - live rules from intent_rules.csv and specific_code_rules.csv
+        Only used for email (.txt) files.
+        Args:
+            user_template_text (str): The base user prompt template text.
+
+        Returns:
+            str: The augmented user prompt with extra instructions and rules.
+        """
+        # 1) Read extra instructions
+        email_extra = self.text_reader.read(
+            settings.email_extra_instructions_path
+        ).rstrip()
+
+        # 2) Load rules from CSVs (via loaders)
+        intent_rules = IntentRulesLoader(settings.intent_rules_csv_path).load()
+        specific_code_rules = SpecificCodeRulesLoader(
+            settings.specific_code_rules_csv_path
+        ).load()
+
+        # 3) Debug logging
+        logger.debug(
+            "augment_email_prompt",
+            extra={
+                "intent_rules_count": len(intent_rules),
+                "specific_code_rules_count": len(specific_code_rules),
+            },
+        )
+
+        # 4) Append instructions + rules to the existing prompt
+        return (
+            user_template_text.rstrip()
+            + "\n\n"
+            + email_extra
+            + "\n\n### INTENT_RULES\n"
+            + json.dumps(intent_rules, ensure_ascii=False, indent=2)
+            + "\n\n### SPECIFIC_CODE_RULES\n"
+            + json.dumps(specific_code_rules, ensure_ascii=False, indent=2)
+        )
+
