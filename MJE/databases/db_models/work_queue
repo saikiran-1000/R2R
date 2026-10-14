@@ -1,0 +1,35 @@
+import json
+from sqlalchemy import JSON, Column, DateTime, Integer, String, func, Boolean, ForeignKey
+from sqlalchemy.orm import relationship
+from database.database_manager import Base,  db_schema
+from dto.request_dtos import ExtractedMailDetailsDTO
+from pathlib import Path
+import os
+from utility.logger import logger
+from sqlalchemy.sql import func
+from database.db_models.email import EmailMaster
+
+class WorkQueue(Base):
+    __tablename__ = 'r2r_work_queue'
+    __table_args__ = {"schema": db_schema}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email_id = Column(Integer, ForeignKey(f"{db_schema}.r2r_emails.id"), nullable=True)
+    region_id = Column(Integer, nullable=False)
+    status = Column(String, nullable=True)
+    stage = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_date = Column(DateTime, default=func.now())
+    updated_date = Column(DateTime, default=func.now(), onupdate=func.now())
+    updated_by = Column(String, nullable=True)
+    
+    email_master = relationship("EmailMaster")
+
+    @classmethod
+    def create(cls, email_id, region_id, status,stage)->object:
+        work_queue = WorkQueue()
+        work_queue.email_id = email_id
+        work_queue.region_id = region_id
+        work_queue.status = status
+        work_queue.stage = stage
+        return work_queue
