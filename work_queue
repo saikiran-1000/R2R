@@ -1,0 +1,24 @@
+import json
+from sqlalchemy import JSON, Column, DateTime, Integer, String, func, Boolean, ForeignKey
+from sqlalchemy.orm import relationship
+from database.database_manager import Base,  db_schema
+from model.request_dtos import ExtractedMailDetailsDTO
+from pathlib import Path
+import os
+from utility.logger import logger
+from sqlalchemy.sql import func
+
+class WorkQueue(Base):
+    __tablename__ = 'work_queue'
+    __table_args__ = {"schema": db_schema}
+
+    wq_id = Column(Integer, primary_key=True, autoincrement=True)
+    email_id = Column(Integer, nullable=False)
+    region_id = Column(Integer, nullable=False)
+    case_id = Column(Integer, nullable=False)
+    status = Column(String, nullable=True)
+    stage = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_date = Column(DateTime, default=func.now())
+    updated_date = Column(DateTime, default=func.now(), onupdate=func.now())
+    updated_by = Column(String, nullable=True)
