@@ -1,0 +1,31 @@
+
+from database.database_manager import transactional
+from database.db_models.email import EmailMaster
+from sqlalchemy.orm import selectinload
+from database.transaction_manager import TransactionManager
+
+
+class EmailMasterService:
+    
+    def __init__(self, tansaction_manager: TransactionManager):
+        self.tansaction_manager = tansaction_manager
+    
+    def find_region_by_folder_name(self, folder_name : str):
+            return self.tansaction_manger.region_master_repository.find_by_folder_name(folder_name)
+    
+    async def find_email_master_by_case_id(self, case_id : str)->EmailMaster:
+            return self.tansaction_manager.emai_master_repository.find_by_case_id(case_id, self.tansaction_manager.session)
+    
+    async def find_email_master_by_id(self, email_id: int) -> EmailMaster:
+        with self.tansaction_manager as tm:
+            return tm.session.query(EmailMaster).options(
+                selectinload(EmailMaster.contents)
+            ).filter(EmailMaster.id == email_id).first()
+    
+    def save_email_master(self, obj_persist:EmailMaster):
+        #email_master= EmailMaster.from_dto(dto=obj_persist)
+        
+        with self.tansaction_manager as tm:
+          email = tm.emai_master_repository.save(obj_persist)
+        # ORM flush will happen here on commit
+        return obj_persist
